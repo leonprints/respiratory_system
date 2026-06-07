@@ -3,40 +3,221 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Visualizzatore 3D</title>
-    <!-- Importa il componente model-viewer di Google -->
-    <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js"></script>
+    <title>Apparato Respiratorio Interattivo</title>
     <style>
-        body {
-            margin: 0;
-            padding: 0;
-            background-color: #0f172a;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            overflow: hidden;
-            font-family: sans-serif;
-        }
-        model-viewer {
-            width: 90vw;
-            height: 90vh;
-            background-color: #1e293b;
-            border-radius: 12px;
-            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
-        }
+        body { margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #121212; color: white; overflow: hidden; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        
+        /* Pannello Principale Adattivo */
+        #info-panel { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); width: 90%; max-width: 400px; background: rgba(30, 30, 30, 0.85); border-radius: 15px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 4px 25px rgba(0,0,0,0.6); z-index: 10; box-sizing: border-box; transition: max-height 0.4s ease-in-out; overflow: hidden; }
+        
+        /* Intestazione cliccabile per comprimere/espandere */
+        .panel-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 15px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.1); user-select: none; }
+        h1 { margin: 0; font-size: 1.2rem; color: #00adb5; text-align: center; flex-grow: 1; }
+        .toggle-icon { font-size: 0.9rem; color: #00adb5; transition: transform 0.3s; }
+        
+        /* Contenuto retrattile */
+        .panel-content { padding: 15px; transition: opacity 0.3s; }
+        p { line-height: 1.4; color: #eeeeee; font-size: 0.85rem; margin: 0 0 12px 0; min-height: 60px; }
+        
+        /* Menu a Tendina Organi */
+        .organ-select { width: 100%; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.2); color: white; padding: 10px; border-radius: 8px; cursor: pointer; font-size: 0.9rem; outline: none; transition: 0.2s; }
+        .organ-select:focus { border-color: #00adb5; }
+        .organ-select option { background: #1e1e1e; color: white; }
+
+        /* Stato compresso del pannello */
+        #info-panel.collapsed .panel-content { opacity: 0; pointer-events: none; }
+        #info-panel.collapsed .toggle-icon { transform: rotate(-180deg); }
+
+        /* Pulsante Animazione */
+        #controls { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 10; }
+        .btn-main { background: #ff2e63; border: none; color: white; padding: 12px 24px; font-size: 0.9rem; font-weight: bold; border-radius: 25px; cursor: pointer; transition: 0.3s; box-shadow: 0 4px 15px rgba(255,46,99,0.4); white-space: nowrap; }
+        .btn-main:hover { background: #ff577f; box-shadow: 0 4px 25px rgba(255,46,99,0.6); }
+        .btn-main.playing { background: #00adb5; box-shadow: 0 4px 15px rgba(0,173,181,0.4); }
     </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
 </head>
 <body>
 
-    <!-- Sostituisci "modello.gltf" con il percorso reale del tuo file -->
-    <model-viewer 
-        src="modello.gltf" 
-        autoplay 
-        camera-controls 
-        shadow-intensity="1" 
-        ar>
-    </model-viewer>
+    <div id="info-panel">
+        <div class="panel-header" onclick="togglePanel()">
+            <h1 id="organ-title">Apparato Respiratorio</h1>
+            <span id="toggle-icon" class="toggle-icon">▲</span>
+        </div>
+        <div class="panel-content" id="panel-content">
+            <p id="organ-desc">Selezioni un elemento dal menu per esaminarne i dettagli o prema il pulsante in basso per avviare la simulazione dinamica.</p>
+            
+            <select class="organ-select" onchange="selectOrgan(this.value)">
+                <option value="" disabled selected>Scegli un organo...</option>
+                <option value="esterne">Vie Respiratorie Esterne</option>
+                <option value="laringe">Laringe e Trachea</option>
+                <option value="polmoni">Polmoni</option>
+                <option value="diaframma">Muscolo Diaframma</option>
+            </select>
+        </div>
+    </div>
 
+    <div id="controls">
+        <button id="anim-btn" class="btn-main">Avvia Animazione</button>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        const organData = {
+            "esterne": { 
+                titolo: "Vie Respiratorie Esterne", 
+                desc: "Comprendono il naso e la cavità orale. Il naso riscalda, umidifica e filtra l'aria in ingresso prima che questa prosegua verso le strutture interne. Le patologie associate includono sinusite (infezione ai seni paranasali) e rinite (il classico raffreddore.",
+                camX: 0, camY: 0.8, camZ: 1.3,
+                tarX: 0, tarY: 0.8, tarZ: 0
+            },
+            "laringe": { 
+                titolo: "Laringe e Trachea", 
+                desc: "La laringe ospita le corde vocali, è chiusa dall'epiglottide che agisce come valvola durante la deglutizione. La trachea è il condotto principale che convoglia l'aria verso i bronchi. Le patologie da cui possono essere affette includono laringite e tracheite (infiammazione dei tessuti interni).",
+                camX: 0, camY: 0.4, camZ: 0.6,
+                tarX: 0, tarY: 0.4, tarZ: 0
+            },
+            "polmoni": { 
+                titolo: "I Polmoni", 
+                desc: "Organi spugnosi in cui avviene lo scambio gassoso per l'ossigenazione del sangue. Adesi alle coste da pleure, membrane sierose che permettono lo scivolamento dei polmoni lungo di esse. In caso di perforamento del torace lo spazio tra le pleure può riempirsi di aria impedendo la respirazione (pneumotorace). Alcune delle patologie associate sono polmonite (infiammazione degli alveoli che si riempiono di liquidi) e asma (infiammazione cronica che chiude i bronchioli).",
+                camX: 0, camY: 0, camZ: 2,
+                tarX: 0, tarY: 0, tarZ: 0
+            },
+            "diaframma": { 
+                titolo: "Il Diaframma", 
+                desc: "Il muscolo piatto principale della respirazione; la sua contrazione verso il basso permette l'espansione dei polmoni verso il basso. Può essere affetto da ernie o da singhiozzo cronico.",
+                camX: 0, camY: -0.6, camZ: 1.5,
+                tarX: 0, tarY: -0.6, tarZ: 0
+            }
+        };
+
+        // Gestione apertura/chiusura della vignetta
+        const infoPanel = document.getElementById('info-panel');
+        const panelContent = document.getElementById('panel-content');
+        
+        function setPanelHeight() {
+            if (!infoPanel.classList.contains('collapsed')) {
+                infoPanel.style.maxHeight = infoPanel.scrollHeight + "px";
+            } else {
+                const headerHeight = document.querySelector('.panel-header').offsetHeight;
+                infoPanel.style.maxHeight = headerHeight + "px";
+            }
+        }
+
+        function togglePanel() {
+            infoPanel.classList.toggle('collapsed');
+            setPanelHeight();
+        }
+
+        // Inizializza altezza corretta dopo il caricamento della pagina
+        window.removeAttribute ? null : setTimeout(setPanelHeight, 200);
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x121212);
+        
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 0, 4);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(5, 10, 7);
+        scene.add(dirLight);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        let mixer;
+        let clock = new THREE.Clock();
+        let isAnimating = false;
+        let action;
+
+        const loader = new THREE.GLTFLoader();
+        loader.load('modello.glb', function(gltf) {
+            const model = gltf.scene;
+            const box = new THREE.Box3().setFromObject(model);
+            const center = box.getCenter(new THREE.Vector3());
+            model.position.sub(center);
+            scene.add(model);
+
+            if(gltf.animations && gltf.animations.length > 0) {
+                mixer = new THREE.AnimationMixer(model);
+                action = mixer.clipAction(gltf.animations[0]);
+            }
+            // Aggiorna l'altezza dinamica una volta caricati gli elementi
+            setPanelHeight();
+        });
+
+        function moveCamera(targetCam, targetLook) {
+            new TWEEN.Tween(camera.position)
+                .to(targetCam, 1200)
+                .easing(TWEEN.Easing.Cubic.Out)
+                .start();
+
+            new TWEEN.Tween(controls.target)
+                .to(targetLook, 1200)
+                .easing(TWEEN.Easing.Cubic.Out)
+                .start();
+        }
+
+        function selectOrgan(id) {
+            if(!organData[id]) return;
+            document.getElementById('organ-title').innerText = organData[id].titolo;
+            document.getElementById('organ-desc').innerText = organData[id].desc;
+            
+            // Se compressa, la espande automaticamente alla selezione
+            if (infoPanel.classList.contains('collapsed')) {
+                infoPanel.classList.remove('collapsed');
+            }
+            
+            // Ricalcola l'altezza dinamica per adattarsi alla lunghezza del nuovo testo
+            setTimeout(setPanelHeight, 10);
+
+            const data = organData[id];
+            moveCamera(
+                { x: data.camX, y: data.camY, z: data.camZ },
+                { x: data.tarX, y: data.tarY, z: data.tarZ }
+            );
+        }
+
+        const btn = document.getElementById('anim-btn');
+        btn.addEventListener('click', () => {
+            if(!action) return;
+            if(!isAnimating) {
+                action.play();
+                btn.innerText = "Pausa Animazione";
+                btn.classList.add('playing');
+                isAnimating = true;
+            } else {
+                action.paused = !action.paused;
+                btn.innerText = action.paused ? "Riprendi Animazione" : "Pausa Animazione";
+                if(action.paused) btn.classList.remove('playing'); else btn.classList.add('playing');
+            }
+        });
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            if (mixer && isAnimating) mixer.update(delta);
+            TWEEN.update();
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            setPanelHeight();
+        });
+    </script>
 </body>
 </html>
